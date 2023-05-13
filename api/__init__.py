@@ -109,7 +109,7 @@ class Role(db.Model):
             'update_at': self.update_at.strftime("%Y-%m-%d %H:%M:%S")
         }
 
-class Newsletter_status(enum.Enum):
+class Newsletter_status(str, enum.Enum):
     SENT = 1
     SCHEDULED = 2
     DRAFT = 3
@@ -134,7 +134,7 @@ class Newsletter(db.Model):
             'title': self.title,
             'content': self.content,
             'author': self.author,
-            'state': self.state,
+            'state': Newsletter_status(self.state).name,
             'deleted': self.deleted,
             'publish': self.publish.strftime("%Y-%m-%d %H:%M:%S"),
             'created_at': self.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -241,6 +241,7 @@ def refresh_database():
     drop_db()
     create_db()
     db_init()
+    return jsonify({'message': 'database refreshed'}), 200
 
 @app.errorhandler(404)
 def not_found_error(error):
