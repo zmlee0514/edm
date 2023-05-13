@@ -215,11 +215,6 @@ def db_init():
     db.session.commit()
     print("db initialized")
 
-# with app.app_context():
-#     drop_db()
-#     create_db()
-#     db_init()
-
 # routes =================================================================
 # for testing
 @app.route("/")
@@ -240,6 +235,12 @@ def data():
 @app.route("/form")
 def form():
     return request.form
+
+@app.route("/database/refresh")
+def refresh_database():
+    drop_db()
+    create_db()
+    db_init()
 
 @app.errorhandler(404)
 def not_found_error(error):
