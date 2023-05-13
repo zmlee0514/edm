@@ -2,12 +2,14 @@ from datetime import datetime
 import enum
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
+from flask_mail import Mail
 from sqlalchemy import Enum
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "mysql+pymysql://edm:edm@localhost:3306/edm"
 db = SQLAlchemy(app)
+mail = Mail(app)
 
 
 # database =================================================================
@@ -202,11 +204,11 @@ def db_init():
         'delete_mails':True
     }
     role_admin = Role(name="admin", group="admin", **permissions_admin)
-    role_test = Role(name="test", group="test", **permissions_test)
+    role_writer = Role(name="writer", group="writer", **permissions_test)
     admin = User(name="admin", account="admin@example.com", password=generate_password_hash("admin"), role=1)
-    writer = User(name="test", account="test@example.com", password=generate_password_hash("test"), role=2)
-    db.session.add_all([role_admin, role_test])
-    db.session.add_all([admin, writer])
+    test = User(name="test", account="test@example.com", password=generate_password_hash("test"), role=2)
+    db.session.add_all([role_admin, role_writer])
+    db.session.add_all([admin, test])
 
     newsletter_test1 = Newsletter(title="test", content="newsletter1", author=1, state=Newsletter_status.DRAFT)
     newsletter_test2 = Newsletter(title="test", content="newsletter2", author=2, state=Newsletter_status.DRAFT)
@@ -221,20 +223,18 @@ def db_init():
 def index():
     return "Hello World"
 
-
 @app.route("/json")
 def json():
     return request.get_json()
-
 
 @app.route("/data")
 def data():
     return request.data
 
-
 @app.route("/form")
 def form():
     return request.form
+
 
 @app.route("/database/refresh")
 def refresh_database():
@@ -257,30 +257,28 @@ def create_user():
     db.session.commit()
     return jsonify(user.serialize), 201
 
-
 @app.route("/users", methods=["GET"])
 def get_users():
     users = User.query.all()
     return jsonify([i.serialize for i in users]), 200
-
 
 @app.route("/users/<int:user_id>", methods=["GET"])
 def get_user(user_id):
     user = User.query.get_or_404(user_id)
     return jsonify(user.serialize), 200
 
-
 @app.route("/users/<int:user_id>", methods=["PATCH"])
 def update_user(user_id):
     user = User.query.get_or_404(user_id)
     request_json = request.get_json()
     for key, value in request_json.items():
+        if key == "account":
+            continue
         if key == "password":
             user.password = generate_password_hash(value)
         setattr(user, key, value)
     db.session.commit()
     return ('', 204)
-
 
 @app.route("/users/<int:user_id>", methods=["DELETE"])
 def delete_user(user_id):
@@ -299,18 +297,15 @@ def create_role():
     db.session.commit()
     return jsonify(role.serialize), 201
 
-
 @app.route("/roles", methods=["GET"])
 def get_roles():
     roles = Role.query.all()
     return jsonify([i.serialize for i in roles]), 200
 
-
 @app.route("/roles/<int:role_id>", methods=["GET"])
 def get_role(role_id):
     role = Role.query.get_or_404(role_id)
     return jsonify(role.serialize), 200
-
 
 @app.route("/roles/<int:role_id>", methods=["PATCH"])
 def update_role(role_id):
@@ -321,14 +316,12 @@ def update_role(role_id):
     db.session.commit()
     return ('', 204)
 
-
 @app.route("/roles/<int:role_id>", methods=["DELETE"])
 def delete_role(role_id):
     role = Role.query.get_or_404(role_id)
     db.session.delete(role)
     db.session.commit()
     return ('', 204)
-
 
 # newsletters
 @app.route("/newsletters", methods=["POST"])
@@ -339,30 +332,29 @@ def create_newsletter():
     db.session.commit()
     return jsonify(newsletter.serialize), 201
 
-
 @app.route("/newsletters", methods=["GET"])
 def get_newsletters():
-    newsletters = Newsletter.query.all()
+    newsletters = Newsletter.query.order_by(Newsletter.id.desc()).all()
     return jsonify([i.serialize for i in newsletters])
-
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["GET"])
 def get_newsletter(newsletter_id):
     newsletter = Newsletter.query.get_or_404(newsletter_id)
     return jsonify(newsletter.serialize), 200
 
+@app.route("/newsletters/<string:state>", methods=["GET"])
+def get_newsletter_by_state(state):
+    newsletters = Newsletter.query.filter_by(state=state).order_by(Newsletter.id.desc()).all()
+    return jsonify([i.serialize for i in newsletters]), 200
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["PATCH"])
 def update_newsletter(newsletter_id):
     newsletter = Newsletter.query.get_or_404(newsletter_id)
-
     request_json = request.get_json()
     for key, value in request_json.items():
         setattr(newsletter, key, value)
     db.session.commit()
-
     return ('', 204)
-
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["DELETE"])
 def delete_newsletter(newsletter_id):
@@ -381,23 +373,19 @@ def create_registration_code():
     db.session.commit()
     return jsonify(code.serialize), 201
 
-
 @app.route("/registration-codes", methods=["GET"])
 def get_registration_codes():
-    codes = Registration_code.query.all()
+    codes = Registration_code.query.order_by(Registration_code.id.desc()).all()
     return jsonify([i.serialize for i in codes])
-
 
 @app.route("/registration-codes/<int:code_id>", methods=["GET"])
 def get_registration_code(code_id):
     code = Registration_code.query.get_or_404(code_id)
     return jsonify(code.serialize), 200
 
-
 @app.route("/registration-codes/validation", methods=["PUT"])
 def validate_registration_code():
     return "Hello World"
-
 
 @app.route("/registration-codes/<int:code_id>", methods=["DELETE"])
 def delete_registration_code(code_id):
@@ -411,7 +399,6 @@ def delete_registration_code(code_id):
 @app.route("/login", methods=["PUT"])
 def login():
     return "Hello World"
-
 
 @app.route("/logout", methods=["PUT"])
 def logout():
