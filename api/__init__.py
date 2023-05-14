@@ -6,6 +6,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from sqlalchemy import Enum, select
+from sqlalchemy.dialects import mysql
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import import_string
 
@@ -96,7 +97,7 @@ class Newsletter(db.Model):
     __tablename__ = "newsletters"
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(128), nullable=False)
-    content = db.Column(db.Text, nullable=False)
+    content = db.Column(mysql.MEDIUMTEXT, nullable=False)
     author_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     state = db.Column(Enum(Newsletter_status), nullable=False)
     deleted = db.Column(db.Boolean, default=False)
@@ -421,7 +422,7 @@ def get_newsletter(newsletter_id):
 
 
 @app.route("/newsletters/<string:state>", methods=["GET"])
-def get_newsletter_by_state(state):
+def get_newsletters_by_state(state):
     newsletters = (
         Newsletter.query.filter_by(deleted=False, state=state).order_by(Newsletter.id.desc()).with_entities(
             Newsletter.id,
