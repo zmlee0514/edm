@@ -3,4 +3,5 @@ __pycache__/
 venv
 .env
 *.pyc
-api/config.py
+instances/
+**config.py
