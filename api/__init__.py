@@ -5,6 +5,10 @@ import smtplib
 from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
+from flask_jwt_extended import (
+    JWTManager, jwt_required, create_access_token,
+    create_refresh_token, get_jwt_identity
+)
 from sqlalchemy import Enum, select
 from sqlalchemy.dialects import mysql
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,6 +22,7 @@ app.config.from_object(cfg)
 
 db = SQLAlchemy(app)
 mail = Mail(app)
+jwt = JWTManager(app)
 
 
 # database =================================================================
@@ -104,7 +109,7 @@ class Newsletter(db.Model):
     publish = db.Column(db.DateTime, default=datetime.now)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, onupdate=datetime.now, default=datetime.now)
-    
+
     user = db.relationship("User", backref="newsletters")
 
     @property
@@ -298,6 +303,7 @@ def not_found_error(error):
 def create_user():
     request_json = request.get_json()
     user = User(**request_json)
+    user.password = generate_password_hash(user.password)
     db.session.add(user)
     db.session.commit()
     return jsonify(user.serialize), 201
@@ -494,7 +500,28 @@ def delete_registration_code(code_id):
 # auth
 @app.route("/login", methods=["PUT"])
 def login():
-    return "Hello World"
+    request_json = request.get_json()
+    if "account" not in request_json or "password" not in request_json:
+        return jsonify({"error": "account and password are required"}), 400
+    user = User.query.filter_by(account=request_json["account"]).first()
+    if not user:
+        return jsonify({"error": "account not found"}), 404
+    if not check_password_hash(user.password, request_json["password"]):
+        return jsonify({"error": "password is incorrect"}), 401
+
+    additional_claims = {
+        'user_id': user.id,
+        'name': user.name,
+        'role': user.role_id
+    }
+    jwt_token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    return jsonify(user=user.serialize, jwt_token=jwt_token), 200
+
+@app.route('/protected', methods=['GET'])
+@jwt_required()
+def protected():
+    current_user = get_jwt_identity()
+    return jsonify(logged_in_as=current_user), 200
 
 
 @app.route("/logout", methods=["PUT"])
