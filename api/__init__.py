@@ -423,9 +423,18 @@ def get_newsletter(newsletter_id):
 @app.route("/newsletters/<string:state>", methods=["GET"])
 def get_newsletter_by_state(state):
     newsletters = (
-        Newsletter.query.filter_by(state=state).order_by(Newsletter.id.desc()).all()
+        Newsletter.query.filter_by(deleted=False, state=state).order_by(Newsletter.id.desc()).with_entities(
+            Newsletter.id,
+            Newsletter.title,
+            Newsletter.author_id,
+            Newsletter.state,
+            Newsletter.publish,
+            Newsletter.created_at,
+            Newsletter.updated_at
+        ).all()
     )
-    return jsonify([i.serialize for i in newsletters]), 200
+    columns = ["id","title","author_id","state","publish","created_at","updated_at"]
+    return jsonify(Newsletter.serialize_with_columns(columns, newsletters)), 200
 
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["PATCH"])
