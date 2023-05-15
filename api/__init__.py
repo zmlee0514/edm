@@ -6,10 +6,10 @@ from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from flask_jwt_extended import (
-    JWTManager, jwt_required, create_access_token,
-    create_refresh_token, get_jwt_identity
+    JWTManager, get_jwt_identity, unset_jwt_cookies, get_jwt,
+    jwt_required, create_access_token, create_refresh_token
 )
-from sqlalchemy import Enum, select
+from sqlalchemy import Enum
 from sqlalchemy.dialects import mysql
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import import_string
@@ -19,11 +19,12 @@ edm_env = os.environ.get("FLASK_ENV", "Development")
 cfg = import_string(f"config.{edm_env}Config")()
 app.config.from_object(cfg)
 
-
 db = SQLAlchemy(app)
 mail = Mail(app)
 jwt = JWTManager(app)
 
+# Create a dictionary to store revoked tokens
+revoked_tokens = set()
 
 # database =================================================================
 class User(db.Model):
@@ -514,16 +515,37 @@ def login():
         'name': user.name,
         'role': user.role_id
     }
-    jwt_token = create_access_token(identity=user.id, additional_claims=additional_claims)
-    return jsonify(user=user.serialize, jwt_token=jwt_token), 200
+    access_token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    refresh_token = create_refresh_token(identity=user.id)
+    return jsonify(user=user.serialize, jwt_token=access_token, refresh_token=refresh_token), 200
+
+@app.route('/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    user_id = get_jwt_identity()
+    user = User.query.filter_by(id=user_id).first()
+    additional_claims = {
+        'user_id': user.id,
+        'name': user.name,
+        'role': user.role_id
+    }
+    access_token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    return jsonify(jwt_token=access_token), 200
+
+@jwt.token_in_blocklist_loader
+def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
+    jti = jwt_payload["jti"]
+    return jti in revoked_tokens
+
+@app.route("/logout", methods=["PUT"])
+@jwt_required(refresh=True)
+def logout():
+    jti = get_jwt()["jti"]
+    revoked_tokens.add(jti)
+    return ('', 204)
 
 @app.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
     current_user = get_jwt_identity()
     return jsonify(logged_in_as=current_user), 200
-
-
-@app.route("/logout", methods=["PUT"])
-def logout():
-    return "Hello World"
