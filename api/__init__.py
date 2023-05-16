@@ -1,15 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import OrderedDict
 from uuid import uuid4
 from PIL import Image
 import time
-import threading
 import enum
 import os
 import smtplib
 from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
+from flask_apscheduler import APScheduler
 from flask_jwt_extended import (
     JWTManager, get_jwt_identity, unset_jwt_cookies, get_jwt,
     jwt_required, create_access_token, create_refresh_token
@@ -27,9 +27,13 @@ app.config.from_object(cfg)
 db = SQLAlchemy(app)
 mail = Mail(app)
 jwt = JWTManager(app)
+scheduler = APScheduler()
+scheduler.init_app(app)
+scheduler.start()
+# todo: scheduler init
 
-revoked_tokens = {"9d0652a8-abac-49ca-a553-fd9385dac6fc"}
-revoked_tokens_sort_by_exp = OrderedDict({1684109014:["9d0652a8-abac-49ca-a553-fd9385dac6fc"]})
+revoked_tokens = {}
+revoked_tokens_sort_by_exp = OrderedDict()
 
 # database =================================================================
 class User(db.Model):
@@ -98,10 +102,10 @@ class Role(db.Model):
         }
 
 
-class Newsletter_status(str, enum.Enum):
-    SENT = 1
-    SCHEDULED = 2
-    DRAFT = 3
+class Newsletter_state(enum.Enum):
+    SENT = enum.auto()
+    SCHEDULED = enum.auto()
+    DRAFT = enum.auto()
 
 
 class Newsletter(db.Model):
@@ -110,7 +114,7 @@ class Newsletter(db.Model):
     title = db.Column(db.String(128), nullable=False)
     content = db.Column(mysql.MEDIUMTEXT, nullable=False)
     author_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    state = db.Column(Enum(Newsletter_status), nullable=False)
+    state = db.Column(Enum(Newsletter_state), nullable=False)
     deleted = db.Column(db.Boolean, default=False)
     publish = db.Column(db.DateTime, default=datetime.now)
     created_at = db.Column(db.DateTime, default=datetime.now)
@@ -126,7 +130,7 @@ class Newsletter(db.Model):
             "title": self.title,
             "content": self.content,
             "author_id": self.author_id,
-            "state": Newsletter_status(self.state).name,
+            "state": Newsletter_state(self.state).name,
             "deleted": self.deleted,
             "publish": self.publish.strftime("%Y-%m-%d %H:%M:%S"),
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -151,7 +155,7 @@ class Newsletter(db.Model):
                 newsletter["updated_at"] = newsletter["updated_at"].strftime("%Y-%m-%d %H:%M:%S")
         if "state" in newsletters[0]:
             for newsletter in newsletters:
-                newsletter["state"] = Newsletter_status(newsletter["state"]).name
+                newsletter["state"] = Newsletter_state(newsletter["state"]).name
 
         return newsletters
 
@@ -193,11 +197,9 @@ def create_db():
     """Creates the db tables."""
     db.create_all()
 
-
 def drop_db():
     """Drops the db tables."""
     db.drop_all()
-
 
 def db_init():
     permissions_admin = {
@@ -224,28 +226,43 @@ def db_init():
         password=generate_password_hash("admin"),
         role_id=1,
     )
-    test = User(
-        name="test",
-        account="test@example.com",
-        password=generate_password_hash("test"),
+    writer = User(
+        name="writer",
+        account="writer@example.com",
+        password=generate_password_hash("writer"),
         role_id=2,
     )
+    Andy = User(
+        name="Andy",
+        account="koichiyamamoto@mindnodeair.com",
+        password=generate_password_hash("koichiyamamoto"),
+        role_id=1,
+    )
     db.session.add_all([role_admin, role_writer])
-    db.session.add_all([admin, test])
+    db.session.add_all([admin, writer, Andy])
 
     newsletter_test1 = Newsletter(
-        title="test", content="newsletter1", author_id=1, state=Newsletter_status.DRAFT
+        title="test", content="newsletter1", author_id=1, state=Newsletter_state.DRAFT
     )
     newsletter_test2 = Newsletter(
-        title="test", content="newsletter2", author_id=2, state=Newsletter_status.DRAFT
+        title="test", content="newsletter2", author_id=2, state=Newsletter_state.DRAFT
     )
     db.session.add_all([newsletter_test1, newsletter_test2])
 
     db.session.commit()
     print("db initialized")
 
+# todo: restart db
 # send mail
-def send_email(subject, recipients, title, content):
+def send_email_with_newsletter(newsletter_id):
+    with scheduler.app.app_context():
+        newsletter = Newsletter.query.get(newsletter_id)
+        send_email_with_components("技職大玩JOB電子報", [newsletter.user.account], newsletter.title, newsletter.content)
+        newsletter.state = Newsletter_state.SENT
+        db.session.commit()
+    return "Email sent!"
+
+def send_email_with_components(subject, recipients, title, content):
     try:
         msg = Message(
             subject, sender=(app.config["MAIL_SENDER_NAME"], app.config["MAIL_USERNAME"]), recipients=recipients
@@ -262,34 +279,24 @@ def send_email(subject, recipients, title, content):
 def index():
     return "Hello World"
 
-
-@app.route("/config")
-def config():
-    return app.config["MAIL_USERNAME"]
-
-
 @app.route("/send_test_email")
 def send_test_email():
-    send_email(
+    send_email_with_components(
         "Test Email", ["leechengmin@mindnodeair.com"], "sample title", "test content"
     )
     return "Email sent!"
-
 
 @app.route("/json")
 def json():
     return request.get_json()
 
-
 @app.route("/data")
 def data():
     return request.data
 
-
 @app.route("/form")
 def form():
     return request.form
-
 
 @app.route("/database/refresh")
 def refresh_database():
@@ -297,7 +304,6 @@ def refresh_database():
     create_db()
     db_init()
     return jsonify({"message": "database refreshed"}), 200
-
 
 @app.errorhandler(404)
 def not_found_error(error):
@@ -314,18 +320,18 @@ def create_user():
     db.session.commit()
     return jsonify(user.serialize), 201
 
-
 @app.route("/users", methods=["GET"])
 def get_users():
-    users = User.query.filter_by(deleted=False).all()
+    order = request.args.get("order", "id")
+    offset = request.args.get("offset", 0)
+    limit = request.args.get("limit", 10)
+    users = User.query.filter_by(deleted=False).order_by(order).offset(offset).limit(limit).all()
     return jsonify([i.serialize for i in users]), 200
-
 
 @app.route("/users/<int:user_id>", methods=["GET"])
 def get_user(user_id):
     user = User.query.get_or_404(user_id)
     return jsonify(user.serialize), 200
-
 
 @app.route("/users/<int:user_id>", methods=["PATCH"])
 def update_user(user_id):
@@ -339,7 +345,6 @@ def update_user(user_id):
         setattr(user, key, value)
     db.session.commit()
     return ("", 204)
-
 
 @app.route("/users/<int:user_id>", methods=["DELETE"])
 def delete_user(user_id):
@@ -358,18 +363,15 @@ def create_role():
     db.session.commit()
     return jsonify(role.serialize), 201
 
-
 @app.route("/roles", methods=["GET"])
 def get_roles():
     roles = Role.query.all()
     return jsonify([i.serialize for i in roles]), 200
 
-
 @app.route("/roles/<int:role_id>", methods=["GET"])
 def get_role(role_id):
     role = Role.query.get_or_404(role_id)
     return jsonify(role.serialize), 200
-
 
 @app.route("/roles/<int:role_id>", methods=["PATCH"])
 def update_role(role_id):
@@ -379,7 +381,6 @@ def update_role(role_id):
         setattr(role, key, value)
     db.session.commit()
     return ("", 204)
-
 
 @app.route("/roles/<int:role_id>", methods=["DELETE"])
 def delete_role(role_id):
@@ -393,25 +394,31 @@ def delete_role(role_id):
 @app.route("/newsletters", methods=["POST"])
 def create_newsletter():
     request_json = request.get_json()
+    if "state" in request_json:
+        if request_json["state"] not in Newsletter_state.__members__:
+            return jsonify({"error": "invalid state"}), 400
+        if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
+            return jsonify({"error": "SENT state can not be specified"}), 400
     newsletter = Newsletter(**request_json)
     db.session.add(newsletter)
     db.session.commit()
-
-    try:
-        send_email("技職大玩JOB電子報", [newsletter.user.account], newsletter.title, newsletter.content)
-    except smtplib.SMTPException as e:
-        return {"error": f"Failed to send email: {str(e)}"}, 500
-
+    if newsletter.state is Newsletter_state.SCHEDULED:
+        publish = newsletter.publish+timedelta(minutes=1)
+        if publish < datetime.now():
+            newsletter.state = Newsletter_state.DRAFT
+            db.session.commit()
+        else:
+            scheduler.add_job(func=send_email_with_newsletter, id=str(newsletter.id), trigger='date', run_date=publish, args=[newsletter.id])
+            print(f"scheduled newsletter {newsletter.id}")
     return jsonify(newsletter.serialize), 201
-
 
 @app.route("/newsletters", methods=["GET"])
 def get_newsletters():
-    # result = session.query(Test).filter_by(category="創業補給站").offset(2).limit(5).all()
+    offset = request.args.get("offset", 0)
+    limit = request.args.get("limit", 10)
     newsletters = (
         Newsletter.query
         .filter_by(deleted=False)
-        .order_by(Newsletter.id.desc())
         .with_entities(
             Newsletter.id,
             Newsletter.title,
@@ -421,6 +428,8 @@ def get_newsletters():
             Newsletter.created_at,
             Newsletter.updated_at
         )
+        .order_by(Newsletter.id.desc())
+        .offset(offset).limit(limit)
         .all()
     )
     columns = ["id","title","author_id","state","publish","created_at","updated_at"]
@@ -435,8 +444,10 @@ def get_newsletter(newsletter_id):
 
 @app.route("/newsletters/<string:state>", methods=["GET"])
 def get_newsletters_by_state(state):
+    offset = request.args.get("offset", 0)
+    limit = request.args.get("limit", 10)
     newsletters = (
-        Newsletter.query.filter_by(deleted=False, state=state).order_by(Newsletter.id.desc()).with_entities(
+        Newsletter.query.filter_by(deleted=False, state=state).with_entities(
             Newsletter.id,
             Newsletter.title,
             Newsletter.author_id,
@@ -444,7 +455,10 @@ def get_newsletters_by_state(state):
             Newsletter.publish,
             Newsletter.created_at,
             Newsletter.updated_at
-        ).all()
+        )
+        .order_by(Newsletter.id.desc())
+        .offset(offset).limit(limit)
+        .all()
     )
     columns = ["id","title","author_id","state","publish","created_at","updated_at"]
     return jsonify(Newsletter.serialize_with_columns(columns, newsletters)), 200
@@ -453,9 +467,28 @@ def get_newsletters_by_state(state):
 @app.route("/newsletters/<int:newsletter_id>", methods=["PATCH"])
 def update_newsletter(newsletter_id):
     newsletter = Newsletter.query.get_or_404(newsletter_id)
+    job_id = str(newsletter_id)
+    if newsletter.state is Newsletter_state.SENT:
+        return jsonify({"error": "Sent newsletter can not be modified"}), 403
+    elif newsletter.state is Newsletter_state.SCHEDULED and scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+        print(f"removed scheduled newsletter {newsletter_id}")
+
     request_json = request.get_json()
+    if "state" in request_json:
+        if request_json["state"] not in Newsletter_state.__members__:
+            return jsonify({"error": "invalid state"}), 400
+        if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
+            return jsonify({"error": "SENT state can not be specified"}), 400
     for key, value in request_json.items():
         setattr(newsletter, key, value)
+    if newsletter.state is Newsletter_state.SCHEDULED:
+        publish = newsletter.publish+timedelta(minutes=1)
+        if publish < datetime.now():
+            newsletter.state = Newsletter_state.DRAFT
+        else:
+            scheduler.add_job(func=send_email_with_newsletter, id=job_id, trigger='date', run_date=publish, args=[newsletter_id])
+            print(f"scheduled newsletter {newsletter_id}")
     db.session.commit()
     return ("", 204)
 
@@ -466,6 +499,27 @@ def delete_newsletter(newsletter_id):
     newsletter.deleted = True
     db.session.commit()
     return ("", 204)
+
+# upload images
+@app.route('/newsletters/images/upload', methods=['POST'])
+def upload_file():
+    if 'image' not in request.files:
+        return jsonify({"error": "No file found"}), 400
+
+    file = request.files['image']
+    if '.' not in file.filename:
+        return jsonify({"error": "Invalid file"}), 400
+    file_ext = file.filename.rsplit('.', 1)[1].lower()
+    if file_ext not in app.config["ALLOWED_UPLOAD_IMAGE_EXTENSIONS"]:
+        return jsonify({"error": "Invalid file type"}), 400
+    uuid_filename = str(uuid4())
+    webp_filename = f'{uuid_filename}.webp'
+    webp_file_path = os.path.join(app.config["API_ROUTE_PREFIX"], app.config['UPLOAD_FOLDER'], "newsletters", "images", webp_filename)
+    os.makedirs(os.path.dirname(webp_file_path), exist_ok=True)
+    image = Image.open(file)
+    image.save(webp_file_path, 'WebP')
+
+    return {'file_path':webp_file_path}, 200
 
 
 # registration codes
@@ -571,23 +625,3 @@ def logout():
 def protected():
     current_user = get_jwt_identity()
     return jsonify(logged_in_as=current_user), 200
-
-# utils
-@app.route('/newsletters/images/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files:
-        return 'No file found', 400
-
-    file = request.files['file']
-    if '.' not in file.filename:
-        return 'Invalid file', 400
-    file_ext = file.filename.rsplit('.', 1)[1].lower()
-    if file_ext not in app.config["ALLOWED_UPLOAD_IMAGE_EXTENSIONS"]:
-        return 'Invalid file type', 400
-    uuid_filename = str(uuid4())
-    webp_filename = f'{uuid_filename}.webp'
-    webp_file_path = os.path.join(app.config["API_ROUTE_PREFIX"], app.config['UPLOAD_FOLDER'], "newsletter content", webp_filename)
-    image = Image.open(file)
-    image.save(webp_file_path, 'WebP')
-
-    return {'file_path':webp_file_path}, 200

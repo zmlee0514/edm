@@ -5,3 +5,4 @@ venv
 *.pyc
 instances/
 **config.py
+api/uploads
