@@ -1,4 +1,9 @@
 from datetime import datetime
+from collections import OrderedDict
+from uuid import uuid4
+from PIL import Image
+import time
+import threading
 import enum
 import os
 import smtplib
@@ -23,8 +28,8 @@ db = SQLAlchemy(app)
 mail = Mail(app)
 jwt = JWTManager(app)
 
-# Create a dictionary to store revoked tokens
-revoked_tokens = set()
+revoked_tokens = {"9d0652a8-abac-49ca-a553-fd9385dac6fc"}
+revoked_tokens_sort_by_exp = OrderedDict({1684109014:["9d0652a8-abac-49ca-a553-fd9385dac6fc"]})
 
 # database =================================================================
 class User(db.Model):
@@ -540,8 +545,25 @@ def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
 @app.route("/logout", methods=["PUT"])
 @jwt_required(refresh=True)
 def logout():
-    jti = get_jwt()["jti"]
+    # clean up expired tokens
+    current_timestamp = time.time()
+    for exp, jti_arr in revoked_tokens_sort_by_exp.items():
+        if exp > current_timestamp:
+            break
+        for jti in jti_arr:
+            revoked_tokens.remove(jti)
+        removed_tokens = revoked_tokens_sort_by_exp.pop(exp)
+        print("removed revoked tokens:", removed_tokens)
+
+    refresh_token = get_jwt()
+    jti = refresh_token["jti"]
+    exp = refresh_token["exp"]
     revoked_tokens.add(jti)
+    print("add revoked token:", jti)
+    if exp in revoked_tokens_sort_by_exp:
+        revoked_tokens_sort_by_exp[exp].append(jti)
+    else:
+        revoked_tokens_sort_by_exp[exp] = [jti]
     return ('', 204)
 
 @app.route('/protected', methods=['GET'])
@@ -549,3 +571,23 @@ def logout():
 def protected():
     current_user = get_jwt_identity()
     return jsonify(logged_in_as=current_user), 200
+
+# utils
+@app.route('/newsletters/images/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return 'No file found', 400
+
+    file = request.files['file']
+    if '.' not in file.filename:
+        return 'Invalid file', 400
+    file_ext = file.filename.rsplit('.', 1)[1].lower()
+    if file_ext not in app.config["ALLOWED_UPLOAD_IMAGE_EXTENSIONS"]:
+        return 'Invalid file type', 400
+    uuid_filename = str(uuid4())
+    webp_filename = f'{uuid_filename}.webp'
+    webp_file_path = os.path.join(app.config["API_ROUTE_PREFIX"], app.config['UPLOAD_FOLDER'], "newsletter content", webp_filename)
+    image = Image.open(file)
+    image.save(webp_file_path, 'WebP')
+
+    return {'file_path':webp_file_path}, 200
