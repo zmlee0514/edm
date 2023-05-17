@@ -11,7 +11,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_mail import Mail, Message
 from flask_apscheduler import APScheduler
 from flask_jwt_extended import (
-    JWTManager, get_jwt_identity, unset_jwt_cookies, get_jwt,
+    JWTManager, get_jwt_identity, get_jwt,
     jwt_required, create_access_token, create_refresh_token
 )
 from sqlalchemy import Enum
@@ -394,11 +394,12 @@ def delete_role(role_id):
 @app.route("/newsletters", methods=["POST"])
 def create_newsletter():
     request_json = request.get_json()
-    if "state" in request_json:
-        if request_json["state"] not in Newsletter_state.__members__:
-            return jsonify({"error": "invalid state"}), 400
-        if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
-            return jsonify({"error": "SENT state can not be specified"}), 400
+    if 'state' not in request_json:
+        request_json["state"] = Newsletter_state.DRAFT
+    if request_json["state"] not in Newsletter_state.__members__:
+        return jsonify({"error": "invalid state"}), 400
+    if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
+        return jsonify({"error": "SENT state can not be specified"}), 400
     newsletter = Newsletter(**request_json)
     db.session.add(newsletter)
     db.session.commit()
@@ -475,11 +476,13 @@ def update_newsletter(newsletter_id):
         print(f"removed scheduled newsletter {newsletter_id}")
 
     request_json = request.get_json()
-    if "state" in request_json:
-        if request_json["state"] not in Newsletter_state.__members__:
-            return jsonify({"error": "invalid state"}), 400
-        if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
-            return jsonify({"error": "SENT state can not be specified"}), 400
+    if 'state' not in request_json:
+        request_json["state"] = Newsletter_state.DRAFT
+    if request_json["state"] not in Newsletter_state.__members__:
+        return jsonify({"error": "invalid state"}), 400
+    if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
+        return jsonify({"error": "SENT state can not be specified"}), 400
+
     for key, value in request_json.items():
         setattr(newsletter, key, value)
     if newsletter.state is Newsletter_state.SCHEDULED:
@@ -519,7 +522,7 @@ def upload_file():
     image = Image.open(file)
     image.save(webp_file_path, 'WebP')
 
-    return {'file_path':webp_file_path}, 200
+    return {'file_path':webp_file_path[13:]}, 200
 
 
 # registration codes
