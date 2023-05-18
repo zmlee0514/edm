@@ -395,7 +395,7 @@ def delete_role(role_id):
 def create_newsletter():
     request_json = request.get_json()
     if 'state' not in request_json:
-        request_json["state"] = Newsletter_state.DRAFT
+        request_json["state"] = "DRAFT"
     if request_json["state"] not in Newsletter_state.__members__:
         return jsonify({"error": "invalid state"}), 400
     if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
@@ -477,7 +477,7 @@ def update_newsletter(newsletter_id):
 
     request_json = request.get_json()
     if 'state' not in request_json:
-        request_json["state"] = Newsletter_state.DRAFT
+        request_json["state"] = "DRAFT"
     if request_json["state"] not in Newsletter_state.__members__:
         return jsonify({"error": "invalid state"}), 400
     if Newsletter_state[request_json["state"]] is Newsletter_state.SENT:
