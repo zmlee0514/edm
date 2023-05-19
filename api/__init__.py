@@ -325,8 +325,10 @@ def get_users():
     order = request.args.get("order", "id")
     offset = request.args.get("offset", 0)
     limit = request.args.get("limit", 10)
-    users = User.query.filter_by(deleted=False).order_by(order).offset(offset).limit(limit).all()
-    return jsonify([i.serialize for i in users]), 200
+    users = User.query.filter_by(deleted=False)
+    total = users.count()
+    users = users.order_by(order).offset(offset).limit(limit).all()
+    return jsonify(users=[i.serialize for i in users], total=total), 200
 
 @app.route("/users/<int:user_id>", methods=["GET"])
 def get_user(user_id):
@@ -429,12 +431,11 @@ def get_newsletters():
             Newsletter.created_at,
             Newsletter.updated_at
         )
-        .order_by(Newsletter.id.desc())
-        .offset(offset).limit(limit)
-        .all()
     )
+    total = newsletters.count()
+    newsletters = newsletters.order_by(Newsletter.id.desc()).offset(offset).limit(limit).all()
     columns = ["id","title","author_id","state","publish","created_at","updated_at"]
-    return jsonify(Newsletter.serialize_with_columns(columns, newsletters)), 200
+    return jsonify(newsletters=Newsletter.serialize_with_columns(columns, newsletters), total=total), 200
 
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["GET"])
@@ -443,12 +444,14 @@ def get_newsletter(newsletter_id):
     return jsonify(newsletter.serialize), 200
 
 
-@app.route("/newsletters/<string:state>", methods=["GET"])
-def get_newsletters_by_state(state):
+@app.route("/newsletters/search", methods=["GET"])
+def get_newsletters_by_state():
     offset = request.args.get("offset", 0)
     limit = request.args.get("limit", 10)
+    state = request.args.get("state")
+    title = request.args.get("title")
     newsletters = (
-        Newsletter.query.filter_by(deleted=False, state=state).with_entities(
+        Newsletter.query.with_entities(
             Newsletter.id,
             Newsletter.title,
             Newsletter.author_id,
@@ -457,12 +460,16 @@ def get_newsletters_by_state(state):
             Newsletter.created_at,
             Newsletter.updated_at
         )
-        .order_by(Newsletter.id.desc())
-        .offset(offset).limit(limit)
-        .all()
+        .filter_by(deleted=False)
     )
+    if state:
+        newsletters = newsletters.filter_by(state=state)
+    if title:
+        newsletters = newsletters.filter(Newsletter.title.like(f"%{title}%"))
+    total = newsletters.count()
+    newsletters = newsletters.order_by(Newsletter.id.desc()).offset(offset).limit(limit).all()
     columns = ["id","title","author_id","state","publish","created_at","updated_at"]
-    return jsonify(Newsletter.serialize_with_columns(columns, newsletters)), 200
+    return jsonify(newsletters=Newsletter.serialize_with_columns(columns, newsletters), total=total), 200
 
 
 @app.route("/newsletters/<int:newsletter_id>", methods=["PATCH"])
