@@ -18,6 +18,7 @@ from sqlalchemy import Enum
 from sqlalchemy.dialects import mysql
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import import_string
+from itsdangerous import URLSafeTimedSerializer
 
 app = Flask(__name__)
 edm_env = os.environ.get("FLASK_ENV", "Development")
@@ -30,7 +31,7 @@ jwt = JWTManager(app)
 scheduler = APScheduler()
 scheduler.init_app(app)
 scheduler.start()
-# todo: scheduler init
+serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 revoked_tokens = {}
 revoked_tokens_sort_by_exp = OrderedDict()
@@ -272,6 +273,22 @@ def send_email_with_components(subject, recipients, title, content):
     except smtplib.SMTPException as e:
         return "Failed to send email: " + str(e)
 
+def scheduler_init(scheduler):
+    with scheduler.app.app_context():
+        unscheduled_newsletters = Newsletter.query.filter_by(state=Newsletter_state.SCHEDULED).all()
+        now = datetime.now()
+        count = 0
+        for newsletter in unscheduled_newsletters:
+            # if the newsletter should be sent when the server shuts down, send it now
+            if newsletter.publish < now:
+                newsletter.publish = now.strftime("%Y-%m-%d %H:%M:%S")
+                scheduler.add_job(func=send_email_with_newsletter, id=str(newsletter.id), trigger='date', run_date=now+timedelta(minutes=1), args=[newsletter.id])
+            else:
+                scheduler.add_job(func=send_email_with_newsletter, id=str(newsletter.id), trigger='date', run_date=newsletter.publish+timedelta(minutes=1), args=[newsletter.id])
+            count += 1
+        print(f"scheduler initialized with {count} unscheduled newsletters")
+        db.session.commit()
+scheduler_init(scheduler)
 
 # routes =================================================================
 # for testing
@@ -507,6 +524,10 @@ def update_newsletter(newsletter_id):
 def delete_newsletter(newsletter_id):
     newsletter = Newsletter.query.get_or_404(newsletter_id)
     newsletter.deleted = True
+    if newsletter.state == Newsletter_state.SCHEDULED:
+        scheduler.remove_job(str(newsletter_id))
+        print(f"removed scheduled newsletter {newsletter_id}")
+        newsletter.state = Newsletter_state.DRAFT
     db.session.commit()
     return ("", 204)
 
@@ -568,7 +589,7 @@ def delete_registration_code(code_id):
 
 
 # auth
-@app.route("/login", methods=["PUT"])
+@app.route("/login", methods=["POST"])
 def login():
     request_json = request.get_json()
     if "account" not in request_json or "password" not in request_json:
@@ -606,7 +627,7 @@ def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
     jti = jwt_payload["jti"]
     return jti in revoked_tokens
 
-@app.route("/logout", methods=["PUT"])
+@app.route("/logout", methods=["DELET"])
 @jwt_required(refresh=True)
 def logout():
     # clean up expired tokens
