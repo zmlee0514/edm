@@ -33,7 +33,7 @@ scheduler.init_app(app)
 scheduler.start()
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
-revoked_tokens = {}
+revoked_tokens = set()
 revoked_tokens_sort_by_exp = OrderedDict()
 
 # database =================================================================
@@ -253,7 +253,6 @@ def db_init():
     db.session.commit()
     print("db initialized")
 
-# todo: restart db
 # send mail
 def send_email_with_newsletter(newsletter_id):
     with scheduler.app.app_context():
@@ -538,7 +537,7 @@ def upload_file():
         return jsonify({"error": "No file found"}), 400
 
     file = request.files['image']
-    if '.' not in file.filename:
+    if not file.filename or '.' not in file.filename:
         return jsonify({"error": "Invalid file"}), 400
     file_ext = file.filename.rsplit('.', 1)[1].lower()
     if file_ext not in app.config["ALLOWED_UPLOAD_IMAGE_EXTENSIONS"]:
@@ -627,7 +626,7 @@ def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
     jti = jwt_payload["jti"]
     return jti in revoked_tokens
 
-@app.route("/logout", methods=["DELET"])
+@app.route("/logout", methods=["DELETE"])
 @jwt_required(refresh=True)
 def logout():
     # clean up expired tokens
