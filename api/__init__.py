@@ -160,36 +160,6 @@ class Newsletter(db.Model):
         return newsletters
 
 
-class Registration_code(db.Model):
-    __tablename__ = "registration_codes"
-    id = db.Column(db.Integer, primary_key=True)
-    account = db.Column(db.String(128), nullable=False, comment="mail")
-    inviter_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    # token = db.Column(db.String, nullable=False)
-    # available_time = db.Column(db.DateTime, default=datetime.now)
-    created_at = db.Column(db.DateTime, default=datetime.now)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.now, default=datetime.now)
-
-    user = db.relationship("User", backref="registration_codes")
-
-    # def __init__(self, account, inviter, token, available_time):
-    #     self.account = account
-    #     self.inviter = inviter
-    #     self.token = token
-    #     self.available_time = available_time
-
-    @property
-    def serialize(self):
-        """Return object data in easily serializable format"""
-        return {
-            "id": self.id,
-            "account": self.account,
-            "inviter_id": self.inviter_id,
-            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": self.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-
 # todo: log database
 
 # utils  =================================================================
@@ -256,17 +226,18 @@ def db_init():
 def send_email_with_newsletter(newsletter_id):
     with scheduler.app.app_context():
         newsletter = Newsletter.query.get(newsletter_id)
-        send_email_with_components("技職大玩JOB電子報", [newsletter.user.account], newsletter.title, newsletter.content)
+        html = render_template("template-mail-newsletter.html", title=newsletter.title, content=newsletter.content)
+        send_email_with_components("技職大玩JOB電子報", [newsletter.user.account], html)
         newsletter.state = Newsletter_state.SENT
         db.session.commit()
     return "Email sent!"
 
-def send_email_with_components(subject, recipients, title, content):
+def send_email_with_components(recipients, subject, html):
     try:
         msg = Message(
             subject, sender=(app.config["MAIL_SENDER_NAME"], app.config["MAIL_USERNAME"]), recipients=recipients
         )
-        msg.html = render_template("template-news.html", title=title, content=content)
+        msg.html = html
         mail.send(msg)
     except smtplib.SMTPException as e:
         return "Failed to send email: " + str(e)
@@ -293,13 +264,6 @@ scheduler_init(scheduler)
 @app.route("/")
 def index():
     return "Hello World"
-
-@app.route("/send_test_email")
-def send_test_email():
-    send_email_with_components(
-        "Test Email", ["leechengmin@mindnodeair.com"], "sample title", "test content"
-    )
-    return "Email sent!"
 
 @app.route("/json")
 def json():
@@ -329,8 +293,8 @@ def not_found_error(error):
 @app.route("/users", methods=["POST"])
 def create_user():
     request_json = request.get_json()
-    user = User(**request_json)
-    user.password = generate_password_hash(user.password)
+    user = User(name=request_json["name"], account=request_json["account"], role_id=request_json["role_id"])
+    user.password = generate_password_hash(request_json["password"])
     db.session.add(user)
     db.session.commit()
     return jsonify(user.serialize), 201
@@ -551,42 +515,17 @@ def upload_file():
     return {'file_path':webp_file_path[13:]}, 200
 
 
-# registration codes
-@app.route("/registration-codes", methods=["POST"])
-def create_registration_code():
-    request_json = request.get_json()
-    code = Registration_code(**request_json)
-    db.session.add(code)
-    db.session.commit()
-    return jsonify(code.serialize), 201
-
-
-@app.route("/registration-codes", methods=["GET"])
-def get_registration_codes():
-    codes = Registration_code.query.order_by(Registration_code.id.desc()).all()
-    return jsonify([i.serialize for i in codes])
-
-
-@app.route("/registration-codes/<int:code_id>", methods=["GET"])
-def get_registration_code(code_id):
-    code = Registration_code.query.get_or_404(code_id)
-    return jsonify(code.serialize), 200
-
-
-@app.route("/registration-codes/validation", methods=["PUT"])
-def validate_registration_code():
-    return "Hello World"
-
-
-@app.route("/registration-codes/<int:code_id>", methods=["DELETE"])
-def delete_registration_code(code_id):
-    code = Registration_code.query.get_or_404(code_id)
-    db.session.delete(code)
-    db.session.commit()
-    return ("", 204)
-
-
 # auth
+@app.route('/register', methods=['POST'])
+def register():
+    request_json = request.get_json()
+    if "token" not in request_json:
+        return jsonify({"error": "token is required"}), 400
+    ret, code = verify_registration_code(request_json["token"])
+    if code != 200:
+        return ret, code
+    return create_user()
+
 @app.route("/login", methods=["POST"])
 def login():
     request_json = request.get_json()
@@ -604,20 +543,15 @@ def login():
         'role': user.role_id
     }
     access_token = create_access_token(identity=user.id, additional_claims=additional_claims)
-    refresh_token = create_refresh_token(identity=user.id)
+    refresh_token = create_refresh_token(identity=user.id, additional_claims=additional_claims)
     return jsonify(user=user.serialize, jwt_token=access_token, refresh_token=refresh_token), 200
 
 @app.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
     user_id = get_jwt_identity()
-    user = User.query.filter_by(id=user_id).first()
-    additional_claims = {
-        'user_id': user.id,
-        'name': user.name,
-        'role': user.role_id
-    }
-    access_token = create_access_token(identity=user.id, additional_claims=additional_claims)
+    claims = get_jwt()
+    access_token = create_access_token(identity=user_id, additional_claims=claims)
     return jsonify(jwt_token=access_token), 200
 
 @jwt.token_in_blocklist_loader
@@ -636,8 +570,28 @@ def logout():
     print("add revoked token:", jti)
     return ('', 204)
 
+# for testing
 @app.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
     current_user = get_jwt_identity()
     return jsonify(logged_in_as=current_user), 200
+
+
+# registration mail
+@app.route("/registrations", methods=["POST"])
+def create_registration_code():
+    request_json = request.get_json()
+    token = serializer.dumps(request_json["email"], salt=app.config['SECURITY_PASSWORD_SALT'])
+    link = f"https://{app.config['DOMAIN']}/register?token={token}"
+    html = render_template("template-mail-register.html", account=request_json["email"], link=link)
+    send_email_with_components([request_json["email"]], "技職大玩JOB後台註冊邀請", html)
+    return {"msg": "Verification email sent"}, 201
+
+@app.route("/registrations/verify/<token>", methods=["GET"])
+def verify_registration_code(token):
+    try:
+        email = serializer.loads(token, salt=app.config['SECURITY_PASSWORD_SALT'], max_age=app.config["INVITATION_EMAIL_EXPIRE_SECONDS"])
+        return {'email':email}, 200
+    except:
+        return {'msg':'Invalid or expired token'}, 401
