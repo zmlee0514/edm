@@ -8,6 +8,7 @@ import os
 import smtplib
 from flask import Flask, jsonify, render_template, request
 from flask_sqlalchemy import SQLAlchemy
+from flask_redis import FlaskRedis
 from flask_mail import Mail, Message
 from flask_apscheduler import APScheduler
 from flask_jwt_extended import (
@@ -32,9 +33,7 @@ scheduler = APScheduler()
 scheduler.init_app(app)
 scheduler.start()
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
-
-revoked_tokens = set()
-revoked_tokens_sort_by_exp = OrderedDict()
+redis = FlaskRedis(app)
 
 # database =================================================================
 class User(db.Model):
@@ -624,30 +623,17 @@ def refresh():
 @jwt.token_in_blocklist_loader
 def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
     jti = jwt_payload["jti"]
-    return jti in revoked_tokens
+    token_in_blacklist = redis.get(jti)
+    return token_in_blacklist is not None
 
 @app.route("/logout", methods=["DELETE"])
 @jwt_required(refresh=True)
 def logout():
-    # clean up expired tokens
-    current_timestamp = time.time()
-    for exp, jti_arr in revoked_tokens_sort_by_exp.items():
-        if exp > current_timestamp:
-            break
-        for jti in jti_arr:
-            revoked_tokens.remove(jti)
-        removed_tokens = revoked_tokens_sort_by_exp.pop(exp)
-        print("removed revoked tokens:", removed_tokens)
-
     refresh_token = get_jwt()
     jti = refresh_token["jti"]
     exp = refresh_token["exp"]
-    revoked_tokens.add(jti)
+    redis.set(jti, 1, ex=int(exp-time.time()))
     print("add revoked token:", jti)
-    if exp in revoked_tokens_sort_by_exp:
-        revoked_tokens_sort_by_exp[exp].append(jti)
-    else:
-        revoked_tokens_sort_by_exp[exp] = [jti]
     return ('', 204)
 
 @app.route('/protected', methods=['GET'])
