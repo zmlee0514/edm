@@ -540,19 +540,19 @@ def login():
     additional_claims = {
         'user_id': user.id,
         'name': user.name,
-        'role': user.role_id
+        'role_id': user.role_id
     }
     access_token = create_access_token(identity=user.id, additional_claims=additional_claims)
     refresh_token = create_refresh_token(identity=user.id, additional_claims=additional_claims)
-    return jsonify(user=user.serialize, jwt_token=access_token, refresh_token=refresh_token), 200
+    return jsonify(user=user.serialize, access_token=access_token, refresh_token=refresh_token), 200
 
 @app.route('/refresh', methods=['POST'])
 @jwt_required(refresh=True)
 def refresh():
     user_id = get_jwt_identity()
-    claims = get_jwt()
+    claims = {k:v for k,v in get_jwt().items() if k in {"user_id", "name", "role_id"}}
     access_token = create_access_token(identity=user_id, additional_claims=claims)
-    return jsonify(jwt_token=access_token), 200
+    return jsonify(access_token=access_token), 200
 
 @jwt.token_in_blocklist_loader
 def check_if_token_is_revoked(jwt_header, jwt_payload: dict):
