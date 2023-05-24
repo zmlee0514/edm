@@ -524,6 +524,7 @@ def register():
     ret, code = verify_registration_code(request_json["token"])
     if code != 200:
         return ret, code
+    redis.delete(request_json["token"])
     return create_user()
 
 @app.route("/login", methods=["POST"])
@@ -583,6 +584,7 @@ def protected():
 def create_registration_code():
     request_json = request.get_json()
     token = serializer.dumps(request_json["email"], salt=app.config['SECURITY_PASSWORD_SALT'])
+    redis.set(token, request_json["email"], ex=3600)
     link = f"https://{app.config['DOMAIN']}/register?token={token}"
     html = render_template("template-mail-register.html", account=request_json["email"], link=link)
     send_email_with_components([request_json["email"]], "技職大玩JOB後台註冊邀請", html)
@@ -592,6 +594,8 @@ def create_registration_code():
 def verify_registration_code(token):
     try:
         email = serializer.loads(token, salt=app.config['SECURITY_PASSWORD_SALT'], max_age=app.config["INVITATION_EMAIL_EXPIRE_SECONDS"])
+        if not redis.exists(token):
+            return {"msg": "The token has already been used"}, 401
         return {'email':email}, 200
     except:
         return {'msg':'Invalid or expired token'}, 401
