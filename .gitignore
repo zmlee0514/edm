@@ -1,8 +1,12 @@
+# development temp
 .vscode
 __pycache__/
+*.pyc
+
+# environments
 venv
 .env
-*.pyc
-instances/
-**config.py
+instance/
+
+# generated files
 api/uploads

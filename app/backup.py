@@ -1,12 +1,11 @@
 from datetime import datetime, timedelta
-from collections import OrderedDict
 from uuid import uuid4
 from PIL import Image
 import time
 import enum
 import os
 import smtplib
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, current_app
 from flask_sqlalchemy import SQLAlchemy
 from flask_redis import FlaskRedis
 from flask_mail import Mail, Message
@@ -18,13 +17,13 @@ from flask_jwt_extended import (
 from sqlalchemy import Enum
 from sqlalchemy.dialects import mysql
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import import_string
+# from werkzeug.utils import import_string
 from itsdangerous import URLSafeTimedSerializer
 
-app = Flask(__name__)
+app = Flask(__name__, instance_relative_config=True)
 edm_env = os.environ.get("FLASK_ENV", "Development")
-cfg = import_string(f"config.{edm_env}Config")()
-app.config.from_object(cfg)
+app.config.from_pyfile(f"{app.instance_path}/BaseConfig.py")
+app.config.from_pyfile(f"{app.instance_path}/{edm_env}Config.py")
 
 db = SQLAlchemy(app)
 mail = Mail(app)
@@ -224,21 +223,22 @@ def db_init():
 
 # send mail
 def send_email_with_newsletter(newsletter_id):
-    with scheduler.app.app_context():
+    with app.app_context():
         newsletter = Newsletter.query.get(newsletter_id)
         html = render_template("template-mail-newsletter.html", title=newsletter.title, content=newsletter.content)
-        send_email_with_components("技職大玩JOB電子報", [newsletter.user.account], html)
+        send_email_with_components([newsletter.user.account], "技職大玩JOB電子報", html)
         newsletter.state = Newsletter_state.SENT
         db.session.commit()
     return "Email sent!"
 
 def send_email_with_components(recipients, subject, html):
     try:
-        msg = Message(
-            subject, sender=(app.config["MAIL_SENDER_NAME"], app.config["MAIL_USERNAME"]), recipients=recipients
-        )
-        msg.html = html
-        mail.send(msg)
+        with app.app_context():
+            msg = Message(
+                subject, sender=(app.config["MAIL_SENDER_NAME"], app.config["MAIL_USERNAME"]), recipients=recipients
+            )
+            msg.html = html
+            mail.send(msg)
     except smtplib.SMTPException as e:
         return "Failed to send email: " + str(e)
 
@@ -507,7 +507,7 @@ def upload_file():
         return jsonify({"error": "Invalid file type"}), 400
     uuid_filename = str(uuid4())
     webp_filename = f'{uuid_filename}.webp'
-    webp_file_path = os.path.join(app.config["API_ROUTE_PREFIX"], app.config['UPLOAD_FOLDER'], "newsletters", "images", webp_filename)
+    webp_file_path = os.path.join(os.getcwd(), "app", "uploads", "newsletters", "images", webp_filename)
     os.makedirs(os.path.dirname(webp_file_path), exist_ok=True)
     image = Image.open(file)
     image.save(webp_file_path, 'WebP')
@@ -587,7 +587,8 @@ def create_registration_code():
     redis.set(token, request_json["email"], ex=3600)
     link = f"https://{app.config['DOMAIN']}/register?token={token}"
     html = render_template("template-mail-register.html", account=request_json["email"], link=link)
-    send_email_with_components([request_json["email"]], "技職大玩JOB後台註冊邀請", html)
+    scheduler.add_job(id=f"send_invitation_{request_json['email']}", func=send_email_with_components, args=[[request_json["email"]], "技職大玩JOB後台註冊邀請", html], trigger='date', run_date=datetime.now())
+    # send_email_with_components([request_json["email"]], "技職大玩JOB後台註冊邀請", html)
     return {"msg": "Verification email sent"}, 201
 
 @app.route("/registrations/verify/<token>", methods=["GET"])
